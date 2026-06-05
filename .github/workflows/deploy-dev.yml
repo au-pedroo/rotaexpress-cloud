@@ -1,66 +1,83 @@
-name: CI/CD · DEV
+name: CI/CD DEV
 
 on:
   push:
-    branches: [ develop ]
+    branches:
+      - develop
+
   pull_request:
-    branches: [ develop ]
+    branches:
+      - develop
 
 jobs:
-  # JOB 1: validação (roda em todo push e PR → vira check obrigatório)
   validate:
     name: Validar HTML
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verificar se index.html existe
+      - name: Verificar index.html
         run: |
           if [ ! -f index.html ]; then
-            echo "ERRO: index.html não encontrado!"
+            echo "index.html não encontrado"
             exit 1
           fi
-          echo "✅ index.html encontrado"
 
-      - name: Verificar tamanho mínimo do arquivo
+      - name: Verificar tamanho mínimo
         run: |
           SIZE=$(wc -c < index.html)
-          echo "Tamanho do arquivo: $SIZE bytes"
+          echo "Tamanho: $SIZE bytes"
+
           if [ "$SIZE" -lt 500 ]; then
-            echo "ERRO: index.html parece incompleto"
+            echo "Arquivo parece incompleto"
             exit 1
           fi
-          echo "✅ Arquivo OK"
 
-  # JOB 2: deploy (só roda em push direto na branch, não em PRs)
   deploy-dev:
-    name: Deploy → DEV
+    name: Deploy DEV
     runs-on: ubuntu-latest
+
     needs: validate
+
     if: github.event_name == 'push'
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy via SSH para EC2 DEV
+      - name: Copiar arquivos para EC2 DEV
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEV_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.DEV_KEY }}
+          source: "index.html,Dockerfile,nginx.conf"
+          target: "/home/ubuntu/rotaexpress"
+
+      - name: Build e Deploy DEV
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEV_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.DEV_KEY }}
           script: |
-            cd /home/ec2-user
-            # Para o container anterior se existir
-            docker stop rotaexpress-dev 2>/dev/null || true
-            docker rm   rotaexpress-dev 2>/dev/null || true
-            # Copia o HTML novo
-            cat > /home/ec2-user/index.html << 'HTMLEOF'
-            $(cat index.html)
-            HTMLEOF
-            # Sobe o container
+            mkdir -p /home/ubuntu/rotaexpress
+            cd /home/ubuntu/rotaexpress
+
+            docker stop rotaexpress-dev || true
+            docker rm rotaexpress-dev || true
+            docker rmi rotaexpress:dev || true
+
+            docker build -t rotaexpress:dev .
+
             docker run -d \
               --name rotaexpress-dev \
               --restart unless-stopped \
               -p 8080:80 \
-              -v /home/ec2-user/index.html:/usr/share/nginx/html/index.html:ro \
-              nginx:alpine
-            echo "✅ DEV no ar: http://${{ secrets.DEV_HOST }}:8080"
+              rotaexpress:dev
+
+            sleep 5
+
+            curl -f http://localhost:8080/health
+
+            echo "Deploy DEV concluído"
