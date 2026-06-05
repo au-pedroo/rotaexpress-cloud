@@ -1,0 +1,44 @@
+name: CI/CD · HOML
+
+on:
+  push:
+    branches: [ staging ]
+  pull_request:
+    branches: [ staging ]
+
+jobs:
+  validate:
+    name: Validar HTML (HOML)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verificar index.html
+        run: |
+          [ -f index.html ] && echo "✅ OK" || (echo "❌ Faltando" && exit 1)
+
+  deploy-homl:
+    name: Deploy → HOML
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy via SSH para EC2 HOML
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOML_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.HOMOL_KEY }}
+          script: |
+            docker stop rotaexpress-homl 2>/dev/null || true
+            docker rm   rotaexpress-homl 2>/dev/null || true
+            cat > /home/ec2-user/index.html << 'EOF'
+            $(cat index.html)
+            EOF
+            docker run -d \
+              --name rotaexpress-homl \
+              --restart unless-stopped \
+              -p 8080:80 \
+              -v /home/ec2-user/index.html:/usr/share/nginx/html/index.html:ro \
+              nginx:alpine
+            echo "✅ HOML no ar: http://${{ secrets.HOML_HOST }}:8080"
